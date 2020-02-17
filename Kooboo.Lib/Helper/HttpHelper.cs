@@ -121,7 +121,7 @@ namespace Kooboo.Lib.Helper
 
         public static T Post<T>(string url, string json)
         {
-            return PostAsync<T>(url, userName: null, password: null, headers: null, new StringContent(json, Encoding.UTF8)).Result;
+            return PostAsync<T>(url, userName: null, password: null, headers: null, new StringContent(json, Encoding.UTF8, "application/json")).Result;
         }
 
         public static T Get<T>(string url, Dictionary<string, string> query = null, string UserName = null, string Password = null)
@@ -174,7 +174,7 @@ namespace Kooboo.Lib.Helper
             return SendAsync<T>(HttpMethod.Get, url, userName, password, headers, content: null);
         }
 
-        private static Task<T> PostAsync<T>(string url, string userName, string password, IDictionary<string, string> headers, HttpContent content)
+        public static Task<T> PostAsync<T>(string url, string userName, string password, IDictionary<string, string> headers, HttpContent content)
         {
             return SendAsync<T>(HttpMethod.Post, url, userName, password, headers, content);
         }
