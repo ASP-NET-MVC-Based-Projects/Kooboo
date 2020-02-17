@@ -56,7 +56,7 @@ namespace Kooboo.Lib.Helper
         }
 
 
-
+       
         public static T ProcessApiResponse<T>(string response)
         {
             if (string.IsNullOrEmpty(response))
@@ -127,7 +127,7 @@ namespace Kooboo.Lib.Helper
         public static T Get<T>(string url, Dictionary<string, string> query = null, string UserName = null, string Password = null)
         {
             // TODO: 原代码没有捕获异常
-            return GetAsync<T>(AddQuery(url, query), UserName, Password, headers: null).Result;
+            return GetAsync<T>(AddQuery(url, query), UserName, Password, headers: null, throwException: true).Result;
         }
          
         public static string GetString(string url)
@@ -156,12 +156,15 @@ namespace Kooboo.Lib.Helper
             if (String.IsNullOrEmpty(url))
                 return default;
 
-            return GetAsync<T>(AddQuery(url, query), userName: null, password: null, headers);
+            return GetAsync<T>(AddQuery(url, query), userName: null, password: null, headers, throwException: true);
         }
 
         public static Task<T> TryGetAsync<T>(string url, Dictionary<string, string> headers = null, Dictionary<string, string> query = null)
         {
-            return GetAsync<T>(url, headers, query);
+            if (String.IsNullOrEmpty(url))
+                return default;
+
+            return GetAsync<T>(AddQuery(url, query), userName: null, password: null, headers);
         }
 
         public static bool PostData(string url, Dictionary<string, string> Headers, byte[] PostBytes, string UserName = null, string Password = null)
@@ -169,19 +172,19 @@ namespace Kooboo.Lib.Helper
             return PostAsync<bool>(url, UserName, Password, Headers, new ByteArrayContent(PostBytes)).Result;
         }
 
-        private static Task<T> GetAsync<T>(string url, string userName, string password, IDictionary<string, string> headers)
+        private static Task<T> GetAsync<T>(string url, string userName, string password, IDictionary<string, string> headers, bool throwException = false)
         {
-            return SendAsync<T>(HttpMethod.Get, url, userName, password, headers, content: null);
+            return SendAsync<T>(HttpMethod.Get, url, userName, password, headers, content: null, throwException);
         }
 
-        public static Task<T> PostAsync<T>(string url, string userName, string password, IDictionary<string, string> headers, HttpContent content)
+        public static Task<T> PostAsync<T>(string url, string userName, string password, IDictionary<string, string> headers, HttpContent content, bool throwException = false)
         {
-            return SendAsync<T>(HttpMethod.Post, url, userName, password, headers, content);
+            return SendAsync<T>(HttpMethod.Post, url, userName, password, headers, content, throwException);
         }
 
-        private static async Task<T> SendAsync<T>(HttpMethod method, string url, string userName, string password, IDictionary<string, string> headers, HttpContent content)
+        private static async Task<T> SendAsync<T>(HttpMethod method, string url, string userName, string password, IDictionary<string, string> headers, HttpContent content, bool throwException = false)
         {
-            var response = await SendAsync(method, url, userName, password, headers, content);
+            var response = await SendAsync(method, url, userName, password, headers, content, throwException);
             if (response == null)
                 return default;
 
@@ -189,7 +192,7 @@ namespace Kooboo.Lib.Helper
             return ProcessApiResponse<T>(strResult);
         }
 
-        private static async Task<HttpResponseMessage> SendAsync(HttpMethod method, string url, string userName, string password, IDictionary<string, string> headers, HttpContent content)
+        private static async Task<HttpResponseMessage> SendAsync(HttpMethod method, string url, string userName, string password, IDictionary<string, string> headers, HttpContent content, bool throwException = false)
         {
             try
             {
@@ -224,6 +227,9 @@ namespace Kooboo.Lib.Helper
             catch (Exception ex)
             {
                 //TODO: log exception
+                if (throwException)
+                    throw ex;
+
                 return null;
             }
         }
