@@ -21,6 +21,11 @@ namespace Kooboo.Lib.Helper
 
         static HttpHelper()
         {
+            //ServicePointManager.ServerCertificateValidationCallback += CheckValidationResult;
+            ////turn on tls12 and tls11,default is ssl3 and tls
+            ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12 | SecurityProtocolType.Tls11;
+            SetCustomSslChecker();
+
             var handler = new HttpClientHandler();
 #if NETSTANDARD2_0
             //ServicePointManager does not affect httpclient in dotnet core
@@ -32,6 +37,25 @@ namespace Kooboo.Lib.Helper
 
             HttpClient = client;
         }
+
+        public static bool HasSetCustomSSL { get; set; }
+
+        public static void SetCustomSslChecker()
+        {
+            if (!HasSetCustomSSL)
+            {
+                ServicePointManager.ServerCertificateValidationCallback += CheckValidationResult;
+                HasSetCustomSSL = true;
+            }
+        }
+
+        private static bool CheckValidationResult(object sender, X509Certificate certificate, X509Chain chain, SslPolicyErrors errors)
+        {
+            //make self signed cert ,so not validate cert in client
+            return true;
+        }
+
+
 
         public static T ProcessApiResponse<T>(string response)
         {
@@ -87,11 +111,7 @@ namespace Kooboo.Lib.Helper
 
         private static async Task<byte[]> ConvertKoobooAvoidDoubleResult(string url, byte[] data, Dictionary<string, string> headers, string UserName = null, string Password = null)
         {
-            var response = await SendAsync(HttpMethod.Post, url, UserName, Password, request =>
-            {
-                AddHeaders(request, headers);
-                request.Content = new ByteArrayContent(data);
-            });
+            var response = await SendAsync(HttpMethod.Post, url, UserName, Password, headers, new ByteArrayContent(data));
 
             if (response == null)
                 return null;
@@ -106,7 +126,7 @@ namespace Kooboo.Lib.Helper
 
         public static T Get<T>(string url, Dictionary<string, string> query = null, string UserName = null, string Password = null)
         {
-            // TODO: 原代码是没有捕获异常
+            // TODO: 原代码没有捕获异常
             return GetAsync<T>(AddQuery(url, query), UserName, Password, headers: null).Result;
         }
          
@@ -117,7 +137,7 @@ namespace Kooboo.Lib.Helper
 
         public static async Task<string> GetStringAsync(string url, Dictionary<string, string> query = null)
         {
-            var response = await SendAsync(HttpMethod.Get, url, userName: null, password: null, createRequest: null);
+            var response = await SendAsync(HttpMethod.Get, url, userName: null, password: null, headers: null, content: null);
             if (response == null)
                 return null;
 
@@ -132,7 +152,7 @@ namespace Kooboo.Lib.Helper
 
         public static Task<T> GetAsync<T>(string url, Dictionary<string, string> headers = null, Dictionary<string, string> query = null)
         {
-            // TODO: 原代码是没有捕获异常
+            // TODO: 原代码没有捕获异常
             if (String.IsNullOrEmpty(url))
                 return default;
 
@@ -151,21 +171,17 @@ namespace Kooboo.Lib.Helper
 
         private static Task<T> GetAsync<T>(string url, string userName, string password, IDictionary<string, string> headers)
         {
-            return SendAsync<T>(HttpMethod.Get, url, userName, password, request => AddHeaders(request, headers));
+            return SendAsync<T>(HttpMethod.Get, url, userName, password, headers, content: null);
         }
 
         private static Task<T> PostAsync<T>(string url, string userName, string password, IDictionary<string, string> headers, HttpContent content)
         {
-            return SendAsync<T>(HttpMethod.Post, url, userName, password, request =>
-            {
-                AddHeaders(request, headers);
-                request.Content = content;
-            });
+            return SendAsync<T>(HttpMethod.Post, url, userName, password, headers, content);
         }
 
-        private static async Task<T> SendAsync<T>(HttpMethod method, string url, string userName, string password, Action<HttpRequestMessage> createRequest)
+        private static async Task<T> SendAsync<T>(HttpMethod method, string url, string userName, string password, IDictionary<string, string> headers, HttpContent content)
         {
-            var response = await SendAsync(method, url, userName, password, createRequest);
+            var response = await SendAsync(method, url, userName, password, headers, content);
             if (response == null)
                 return default;
 
@@ -173,18 +189,33 @@ namespace Kooboo.Lib.Helper
             return ProcessApiResponse<T>(strResult);
         }
 
-        private static async Task<HttpResponseMessage> SendAsync(HttpMethod method, string url, string userName, string password, Action<HttpRequestMessage> createRequest)
+        private static async Task<HttpResponseMessage> SendAsync(HttpMethod method, string url, string userName, string password, IDictionary<string, string> headers, HttpContent content)
         {
             try
             {
                 var request = new HttpRequestMessage(method, url);
+
+                // Add authentication headers
                 if (!String.IsNullOrEmpty(userName) && !String.IsNullOrEmpty(password))
                 {
                     var bytes = Encoding.UTF8.GetBytes(String.Format("{0}:{1}", userName, password));
                     request.Headers.Authorization = new AuthenticationHeaderValue("Basic", Convert.ToBase64String(bytes));
                 }
 
-                createRequest?.Invoke(request);
+                // Add other headers
+                if (headers != null)
+                {
+                    foreach (var each in headers)
+                    {
+                        request.Headers.Add(each.Key, each.Value);
+                    }
+                }
+
+                // Add content in POST
+                if (content != null)
+                {
+                    request.Content = content;
+                }
 
                 // Send request
                 var response = await HttpClient.SendAsync(request);
@@ -194,17 +225,6 @@ namespace Kooboo.Lib.Helper
             {
                 //TODO: log exception
                 return null;
-            }
-        }
-
-        private static void AddHeaders(HttpRequestMessage request, IDictionary<string, string> headers)
-        {
-            if (headers != null)
-            {
-                foreach (var each in headers)
-                {
-                    request.Headers.Add(each.Key, each.Value);
-                }
             }
         }
 

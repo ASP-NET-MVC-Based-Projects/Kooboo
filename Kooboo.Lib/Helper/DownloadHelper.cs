@@ -23,7 +23,6 @@ namespace Kooboo.Lib.Helper
             ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12 | SecurityProtocolType.Tls11; 
             HttpHelper.SetCustomSslChecker(); 
         }
- 
 
         public static byte[] DownloadFile(string absoluteUrl, string containsContentType = null)
         {
