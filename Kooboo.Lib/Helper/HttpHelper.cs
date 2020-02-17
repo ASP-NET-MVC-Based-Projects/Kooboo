@@ -4,6 +4,8 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
+using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Text;
 using System.Net.Security;
 using System.Security.Cryptography.X509Certificates;
@@ -13,32 +15,23 @@ namespace Kooboo.Lib.Helper
 {
     public class HttpHelper
     {
+        public static readonly string DefaultUserAgent = "Mozilla/4.0 (compatible; MSIE 6.0; Windows NT 5.2; SV1; .NET CLR 1.1.4322; .NET CLR 2.0.50727; .NET CLR 4.0.30319)";
+
+        public static HttpClient HttpClient { get; set; }
+
         static HttpHelper()
         {
-            //ServicePointManager.ServerCertificateValidationCallback += CheckValidationResult;
-            ////turn on tls12 and tls11,default is ssl3 and tls
-            ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12 | SecurityProtocolType.Tls11;
-            SetCustomSslChecker();
+            var handler = new HttpClientHandler();
+#if NETSTANDARD2_0
+            //ServicePointManager does not affect httpclient in dotnet core
+            handler.ServerCertificateCustomValidationCallback = delegate { return true; };
+#endif
+            handler.Proxy = null;
+            var client = new HttpClient(handler);
+            client.DefaultRequestHeaders.Add("User-Agent", DefaultUserAgent);
+
+            HttpClient = client;
         }
-
-        public static bool HasSetCustomSSL { get; set; }
-
-        public static void SetCustomSslChecker()
-        {
-            if (!HasSetCustomSSL)
-            {
-                ServicePointManager.ServerCertificateValidationCallback += CheckValidationResult;
-                HasSetCustomSSL = true;
-            }
-        }
-
-        private static bool CheckValidationResult(object sender, X509Certificate certificate, X509Chain chain, SslPolicyErrors errors)
-        {
-            //make self signed cert ,so not validate cert in client
-            return true;
-        }
-
-        public static readonly string DefaultUserAgent = "Mozilla/4.0 (compatible; MSIE 6.0; Windows NT 5.2; SV1; .NET CLR 1.1.4322; .NET CLR 2.0.50727; .NET CLR 4.0.30319)";
 
         public static T ProcessApiResponse<T>(string response)
         {
@@ -79,314 +72,148 @@ namespace Kooboo.Lib.Helper
 
         public static T Post<T>(string url, Dictionary<string, string> parameters, string UserName = null, string Password = null)
         {
-            try
-            {
-                var postString = String.Join("&", parameters.Select(it => String.Concat(it.Key, "=", Uri.EscapeDataString(it.Value))));
-                var postData = Encoding.UTF8.GetBytes(postString);
-                using (var client = new WebClient())
-                {
-                    client.Headers.Add("user-agent", DefaultUserAgent);
-                    client.Headers.Add("Content-Type", "application/x-www-form-urlencoded");
-
-                    if (!string.IsNullOrEmpty(UserName) && !string.IsNullOrEmpty(Password))
-                    {
-                        var bytes = Encoding.UTF8.GetBytes(String.Format("{0}:{1}", UserName, Password));
-                        client.Headers.Add("Authorization", "Basic " + Convert.ToBase64String(bytes));
-                    }
-
-                    var responseData = client.UploadData(url, "POST", postData);
-                    var strResult = Encoding.UTF8.GetString(responseData);
-                    return ProcessApiResponse<T>(strResult);
-                }
-            }
-            catch (Exception ex)
-            {
-                //TODO: log exception
-            }
-            return default(T);
+            return PostAsync<T>(url, UserName, Password, headers: null, new FormUrlEncodedContent(parameters)).Result;
         }
 
         public static T Post<T>(string url, Dictionary<string, string> Headers, byte[] postBytes, string UserName = null, string Password = null)
         {
-            if (!string.IsNullOrEmpty(UserName))
-            {
-                if (Headers == null)
-                {
-                    Headers = new Dictionary<string, string>();
-                }
-                var bytes = Encoding.UTF8.GetBytes(String.Format("{0}:{1}", UserName, Password));
-                Headers.Add("Authorization", "Basic " + Convert.ToBase64String(bytes));
-            }
-            using (var client = new WebClient())
-            {
-                client.Headers.Add("user-agent", DefaultUserAgent);
-                client.Headers.Add("Content-Type", "multipart/form-data");
-                if (Headers != null)
-                {
-                    foreach (var item in Headers)
-                    {
-                        client.Headers.Add(item.Key, item.Value);
-                    }
-                }
-
-                try
-                {
-                    var responseData = client.UploadData(url, "POST", postBytes);
-
-                    return ProcessApiResponse<T>(Encoding.UTF8.GetString(responseData));
-                }
-                catch (Exception ex)
-                {
-
-                }
-                return default(T);
-            }
+            return PostAsync<T>(url, UserName, Password, Headers, new ByteArrayContent(postBytes)).Result;
         }
 
         public static byte[] ConvertKooboo(string url, byte[] data, Dictionary<string, string> headers, string UserName = null, string Password = null)
         {
-            try
-            {
-                using (var client = new WebClient())
-                {
-                    client.Headers.Add("user-agent", DefaultUserAgent);
-                    client.Headers.Add("Content-Type", "application/x-www-form-urlencoded");
-                    foreach (var item in headers)
-                    {
-                        client.Headers.Add(item.Key, item.Value);
-                    }
-                    if (!string.IsNullOrEmpty(UserName))
-                    {
-                        var bytes = Encoding.UTF8.GetBytes(String.Format("{0}:{1}", UserName, Password));
-                        client.Headers.Add("Authorization", "Basic " + Convert.ToBase64String(bytes));
-                    }
+            return ConvertKoobooAvoidDoubleResult(url, data, headers, UserName, Password).Result;
+        }
 
-                    return client.UploadData(url, "POST", data);
-                }
-            }
-            catch (Exception ex)
+        private static async Task<byte[]> ConvertKoobooAvoidDoubleResult(string url, byte[] data, Dictionary<string, string> headers, string UserName = null, string Password = null)
+        {
+            var response = await SendAsync(HttpMethod.Post, url, UserName, Password, request =>
             {
-                //TODO: log exception
-            }
-            return null;
+                AddHeaders(request, headers);
+                request.Content = new ByteArrayContent(data);
+            });
+
+            if (response == null)
+                return null;
+
+            return await response.Content.ReadAsByteArrayAsync();
         }
 
         public static T Post<T>(string url, string json)
         {
-            try
-            {
-                json = System.Net.WebUtility.UrlEncode(json);  ///????? What is this????
-                var postData = Encoding.UTF8.GetBytes(json);
-                using (var client = new WebClient())
-                {
-                    client.Proxy = null;
-                    client.Headers.Add("user-agent", DefaultUserAgent);
-                    client.Headers.Add("Content-Type", "application/x-www-form-urlencoded");
-
-                    var responseData = client.UploadData(url, "POST", postData);
-
-                    return ProcessApiResponse<T>(Encoding.UTF8.GetString(responseData));
-                }
-            }
-            catch (Exception)
-            {
-                //TODO: log exception
-            }
-            return default(T);
+            return PostAsync<T>(url, userName: null, password: null, headers: null, new StringContent(json, Encoding.UTF8)).Result;
         }
 
         public static T Get<T>(string url, Dictionary<string, string> query = null, string UserName = null, string Password = null)
         {
-            if (query != null)
-            {
-                url = UrlHelper.AppendQueryString(url, query);
-            }
-            using (var client = new WebClient())
-            {
-                client.Headers.Add("user-agent", DefaultUserAgent);
-
-                if (!string.IsNullOrEmpty(UserName) && !string.IsNullOrEmpty(Password))
-                {
-                    var bytes = Encoding.UTF8.GetBytes(String.Format("{0}:{1}", UserName, Password));
-                    client.Headers.Add("Authorization", "Basic " + Convert.ToBase64String(bytes));
-                }
-                client.Proxy = null;
-                client.Encoding = Encoding.UTF8;
-
-                var backstring = client.DownloadString(url);
-
-                return ProcessApiResponse<T>(backstring);
-            }
+            // TODO: 原代码是没有捕获异常
+            return GetAsync<T>(AddQuery(url, query), UserName, Password, headers: null).Result;
         }
          
         public static string GetString(string url)
         {
-            try
-            {
-                using (var client = new WebClient())
-                {
-                    client.Headers.Add("user-agent", DefaultUserAgent);
-
-                    client.Proxy = null;
-                    client.Encoding = Encoding.UTF8;
-
-                    return client.DownloadString(url);
-                }
-            }
-            catch (Exception ex)
-            {
-
-            }
-
-            return null;
+            return GetStringAsync(url).Result;
         }
-
 
         public static async Task<string> GetStringAsync(string url, Dictionary<string, string> query = null)
         {
-            try
-            {
+            var response = await SendAsync(HttpMethod.Get, url, userName: null, password: null, createRequest: null);
+            if (response == null)
+                return null;
 
-                if (query != null)
-                {
-                    url = UrlHelper.AppendQueryString(url, query);
-                }
-
-                using (var client = new WebClient())
-                {
-                    client.Headers.Add("user-agent", DefaultUserAgent);
-
-                    client.Proxy = null;
-                    client.Encoding = Encoding.UTF8;
-
-                  return  await client.DownloadStringTaskAsync(new Uri(url));
-                }
-            }
-            catch (Exception ex)
-            { 
-
-            } 
-
-            return null;
+            return await response.Content.ReadAsStringAsync();
         }
 
 
         public static T TryGet<T>(string url, Dictionary<string, string> query = null)
         {
-            if (query != null)
-            {
-                url = UrlHelper.AppendQueryString(url, query);
-            }
-
-            try
-            {
-                using (var client = new WebClient())
-                {
-                    client.Headers.Add("user-agent", DefaultUserAgent);
-
-                    client.Proxy = null;
-                    client.Encoding = Encoding.UTF8;
-
-                    var backstring = client.DownloadString(url);
-
-                    return ProcessApiResponse<T>(backstring);
-                }
-            }
-            catch (Exception ex)
-            {
-
-            }
-            return default(T);
+            return GetAsync<T>(AddQuery(url, query), userName: null, password: null, headers: null).Result;
         }
 
-        public static async Task<T> GetAsync<T>(string url, Dictionary<string, string> headers = null, Dictionary<string, string> query = null)
+        public static Task<T> GetAsync<T>(string url, Dictionary<string, string> headers = null, Dictionary<string, string> query = null)
         {
-            if (string.IsNullOrEmpty(url))
-            {
-                return default(T);
-            }
-            using (var client = new WebClient())
-            {
-                client.Headers.Add("user-agent", DefaultUserAgent);
+            // TODO: 原代码是没有捕获异常
+            if (String.IsNullOrEmpty(url))
+                return default;
 
-                if (headers != null)
-                {
-                    foreach (var item in headers)
-                    {
-                        client.Headers.Add(item.Key, item.Value);
-                    }
-                }
-
-                if (query != null)
-                {
-                    url = UrlHelper.AppendQueryString(url, query);
-                }
-
-                client.Proxy = null;
-                client.Encoding = Encoding.UTF8;
-
-                var backstring = await client.DownloadStringTaskAsync(new Uri(url));
-                var result = ProcessApiResponse<T>(backstring);
-                return result;
-            }
+            return GetAsync<T>(AddQuery(url, query), userName: null, password: null, headers);
         }
 
-
-        public static async Task<T> TryGetAsync<T>(string url, Dictionary<string, string> headers = null, Dictionary<string, string> query = null)
+        public static Task<T> TryGetAsync<T>(string url, Dictionary<string, string> headers = null, Dictionary<string, string> query = null)
         {
-
-            try
-            {
-                return await GetAsync<T>(url, headers, query);
-            }
-            catch (Exception ex)
-            {
-                return default(T);
-            }
-
-
+            return GetAsync<T>(url, headers, query);
         }
-
 
         public static bool PostData(string url, Dictionary<string, string> Headers, byte[] PostBytes, string UserName = null, string Password = null)
         {
-            if (!string.IsNullOrEmpty(UserName))
+            return PostAsync<bool>(url, UserName, Password, Headers, new ByteArrayContent(PostBytes)).Result;
+        }
+
+        private static Task<T> GetAsync<T>(string url, string userName, string password, IDictionary<string, string> headers)
+        {
+            return SendAsync<T>(HttpMethod.Get, url, userName, password, request => AddHeaders(request, headers));
+        }
+
+        private static Task<T> PostAsync<T>(string url, string userName, string password, IDictionary<string, string> headers, HttpContent content)
+        {
+            return SendAsync<T>(HttpMethod.Post, url, userName, password, request =>
             {
-                if (Headers == null)
+                AddHeaders(request, headers);
+                request.Content = content;
+            });
+        }
+
+        private static async Task<T> SendAsync<T>(HttpMethod method, string url, string userName, string password, Action<HttpRequestMessage> createRequest)
+        {
+            var response = await SendAsync(method, url, userName, password, createRequest);
+            if (response == null)
+                return default;
+
+            var strResult = await response.Content.ReadAsStringAsync();
+            return ProcessApiResponse<T>(strResult);
+        }
+
+        private static async Task<HttpResponseMessage> SendAsync(HttpMethod method, string url, string userName, string password, Action<HttpRequestMessage> createRequest)
+        {
+            try
+            {
+                var request = new HttpRequestMessage(method, url);
+                if (!String.IsNullOrEmpty(userName) && !String.IsNullOrEmpty(password))
                 {
-                    Headers = new Dictionary<string, string>();
+                    var bytes = Encoding.UTF8.GetBytes(String.Format("{0}:{1}", userName, password));
+                    request.Headers.Authorization = new AuthenticationHeaderValue("Basic", Convert.ToBase64String(bytes));
                 }
-                var bytes = Encoding.UTF8.GetBytes(String.Format("{0}:{1}", UserName, Password));
-                Headers.Add("Authorization", "Basic " + Convert.ToBase64String(bytes));
+
+                createRequest?.Invoke(request);
+
+                // Send request
+                var response = await HttpClient.SendAsync(request);
+                return response;
             }
-            using (var client = new WebClient())
+            catch (Exception ex)
             {
-                client.Headers.Add("user-agent", DefaultUserAgent);
-                client.Headers.Add("Content-Type", "multipart/form-data");
-                if (Headers != null)
-                {
-                    foreach (var item in Headers)
-                    {
-                        client.Headers.Add(item.Key, item.Value);
-                    }
-                }
-
-                bool success = false;
-                try
-                {
-                    var responseData = client.UploadData(url, "POST", PostBytes);
-
-                    var ok = ProcessApiResponse<bool>(Encoding.UTF8.GetString(responseData));
-
-                    success = ok;
-                }
-                catch (Exception ex)
-                {
-                    success = false;
-                }
-                return success;
+                //TODO: log exception
+                return null;
             }
         }
 
+        private static void AddHeaders(HttpRequestMessage request, IDictionary<string, string> headers)
+        {
+            if (headers != null)
+            {
+                foreach (var each in headers)
+                {
+                    request.Headers.Add(each.Key, each.Value);
+                }
+            }
+        }
+
+        private static string AddQuery(string url, Dictionary<string, string> query)
+        {
+            if (query == null)
+                return url;
+
+            return UrlHelper.AppendQueryString(url, query);
+        }
     }
 }
